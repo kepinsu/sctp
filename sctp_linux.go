@@ -1,4 +1,6 @@
+//go:build linux && !386
 // +build linux,!386
+
 // Copyright 2019 Wataru Ishida. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -19,15 +21,17 @@ package sctp
 import (
 	"io"
 	"net"
+	"runtime"
 	"sync/atomic"
 	"syscall"
 	"unsafe"
-	"runtime"
+
+	"golang.org/x/sys/unix"
 )
 
 func setsockopt(fd int, optname, optval, optlen uintptr) (uintptr, uintptr, error) {
 	// FIXME: syscall.SYS_SETSOCKOPT is undefined on 386
-	r0, r1, errno := syscall.Syscall6(syscall.SYS_SETSOCKOPT,
+	r0, r1, errno := unix.Syscall6(unix.SYS_SETSOCKOPT,
 		uintptr(fd),
 		SOL_SCTP,
 		optname,
@@ -45,7 +49,7 @@ func getsockopt(fd int, optname, optval, optlen uintptr) (uintptr, uintptr, erro
 		optlen = uintptr(unsafe.Pointer(&optlen))
 	}
 	// FIXME: syscall.SYS_GETSOCKOPT is undefined on 386
-	r0, r1, errno := syscall.Syscall6(syscall.SYS_GETSOCKOPT,
+	r0, r1, errno := unix.Syscall6(unix.SYS_GETSOCKOPT,
 		uintptr(fd),
 		SOL_SCTP,
 		optname,
@@ -79,26 +83,26 @@ func (c *SCTPConn) SCTPWrite(b []byte, info *SndRcvInfo) (int, error) {
 	var cbuf []byte
 	if info != nil {
 		cmsgBuf := toBuf(info)
-		hdr := &syscall.Cmsghdr{
-			Level: syscall.IPPROTO_SCTP,
+		hdr := &unix.Cmsghdr{
+			Level: unix.IPPROTO_SCTP,
 			Type:  SCTP_CMSG_SNDRCV,
 		}
 
 		// bitwidth of hdr.Len is platform-specific,
 		// so we use hdr.SetLen() rather than directly setting hdr.Len
-		hdr.SetLen(syscall.CmsgSpace(len(cmsgBuf)))
+		hdr.SetLen(unix.CmsgSpace(len(cmsgBuf)))
 		cbuf = append(toBuf(hdr), cmsgBuf...)
 	}
-	return syscall.SendmsgN(c.fd(), b, cbuf, nil, 0)
+	return unix.SendmsgN(c.fd(), b, cbuf, nil, 0)
 }
 
 func parseSndRcvInfo(b []byte) (*SndRcvInfo, error) {
-	msgs, err := syscall.ParseSocketControlMessage(b)
+	msgs, err := unix.ParseSocketControlMessage(b)
 	if err != nil {
 		return nil, err
 	}
 	for _, m := range msgs {
-		if m.Header.Level == syscall.IPPROTO_SCTP {
+		if m.Header.Level == unix.IPPROTO_SCTP {
 			switch m.Header.Type {
 			case SCTP_CMSG_SNDRCV:
 				return (*SndRcvInfo)(unsafe.Pointer(&m.Data[0])), nil
@@ -111,7 +115,7 @@ func parseSndRcvInfo(b []byte) (*SndRcvInfo, error) {
 func (c *SCTPConn) SCTPRead(b []byte) (int, *SndRcvInfo, error) {
 	oob := make([]byte, 254)
 	for {
-		n, oobn, recvflags, _, err := syscall.Recvmsg(c.fd(), b, oob, 0)
+		n, oobn, recvflags, _, err := unix.Recvmsg(c.fd(), b, oob, 0)
 		if err != nil {
 			return n, nil, err
 		}
@@ -142,27 +146,27 @@ func (c *SCTPConn) Close() error {
 				Flags: SCTP_EOF,
 			}
 			c.SCTPWrite(nil, info)
-			syscall.Shutdown(int(fd), syscall.SHUT_RDWR)
-			return syscall.Close(int(fd))
+			unix.Shutdown(int(fd), unix.SHUT_RDWR)
+			return unix.Close(int(fd))
 		}
 	}
-	return syscall.EBADF
+	return unix.EBADF
 }
 
 func (c *SCTPConn) SetWriteBuffer(bytes int) error {
-	return syscall.SetsockoptInt(c.fd(), syscall.SOL_SOCKET, syscall.SO_SNDBUF, bytes)
+	return unix.SetsockoptInt(c.fd(), unix.SOL_SOCKET, unix.SO_SNDBUF, bytes)
 }
 
 func (c *SCTPConn) GetWriteBuffer() (int, error) {
-	return syscall.GetsockoptInt(c.fd(), syscall.SOL_SOCKET, syscall.SO_SNDBUF)
+	return unix.GetsockoptInt(c.fd(), unix.SOL_SOCKET, unix.SO_SNDBUF)
 }
 
 func (c *SCTPConn) SetReadBuffer(bytes int) error {
-	return syscall.SetsockoptInt(c.fd(), syscall.SOL_SOCKET, syscall.SO_RCVBUF, bytes)
+	return unix.SetsockoptInt(c.fd(), unix.SOL_SOCKET, unix.SO_RCVBUF, bytes)
 }
 
 func (c *SCTPConn) GetReadBuffer() (int, error) {
-	return syscall.GetsockoptInt(c.fd(), syscall.SOL_SOCKET, syscall.SO_RCVBUF)
+	return unix.GetsockoptInt(c.fd(), unix.SOL_SOCKET, unix.SO_RCVBUF)
 }
 
 // ListenSCTP - start listener on specified address/port
@@ -178,10 +182,10 @@ func ListenSCTPExt(network string, laddr *SCTPAddr, options InitMsg) (*SCTPListe
 // listenSCTPExtConfig - start listener on specified address/port with given SCTP options and socket configuration
 func listenSCTPExtConfig(network string, laddr *SCTPAddr, options InitMsg, control func(network, address string, c syscall.RawConn) error) (*SCTPListener, error) {
 	af, ipv6only := favoriteAddrFamily(network, laddr, nil, "listen")
-	sock, err := syscall.Socket(
+	sock, err := unix.Socket(
 		af,
-		syscall.SOCK_STREAM,
-		syscall.IPPROTO_SCTP,
+		unix.SOCK_STREAM,
+		unix.IPPROTO_SCTP,
 	)
 	if err != nil {
 		return nil, err
@@ -190,7 +194,7 @@ func listenSCTPExtConfig(network string, laddr *SCTPAddr, options InitMsg, contr
 	// close socket on error
 	defer func() {
 		if err != nil {
-			syscall.Close(sock)
+			unix.Close(sock)
 		}
 	}()
 	if err = setDefaultSockopts(sock, af, ipv6only); err != nil {
@@ -210,9 +214,9 @@ func listenSCTPExtConfig(network string, laddr *SCTPAddr, options InitMsg, contr
 	if laddr != nil {
 		// If IP address and/or port was not provided so far, let's use the unspecified IPv4 or IPv6 address
 		if len(laddr.IPAddrs) == 0 {
-			if af == syscall.AF_INET {
+			if af == unix.AF_INET {
 				laddr.IPAddrs = append(laddr.IPAddrs, net.IPAddr{IP: net.IPv4zero})
-			} else if af == syscall.AF_INET6 {
+			} else if af == unix.AF_INET6 {
 				laddr.IPAddrs = append(laddr.IPAddrs, net.IPAddr{IP: net.IPv6zero})
 			}
 		}
@@ -221,7 +225,7 @@ func listenSCTPExtConfig(network string, laddr *SCTPAddr, options InitMsg, contr
 			return nil, err
 		}
 	}
-	err = syscall.Listen(sock, syscall.SOMAXCONN)
+	err = unix.Listen(sock, unix.SOMAXCONN)
 	if err != nil {
 		return nil, err
 	}
@@ -232,7 +236,7 @@ func listenSCTPExtConfig(network string, laddr *SCTPAddr, options InitMsg, contr
 
 // AcceptSCTP waits for and returns the next SCTP connection to the listener.
 func (ln *SCTPListener) AcceptSCTP() (*SCTPConn, error) {
-	fd, _, err := syscall.Accept4(ln.fd, 0)
+	fd, _, err := unix.Accept4(ln.fd, 0)
 	return NewSCTPConn(fd, nil), err
 }
 
@@ -242,8 +246,8 @@ func (ln *SCTPListener) Accept() (net.Conn, error) {
 }
 
 func (ln *SCTPListener) Close() error {
-	syscall.Shutdown(ln.fd, syscall.SHUT_RDWR)
-	return syscall.Close(ln.fd)
+	unix.Shutdown(ln.fd, unix.SHUT_RDWR)
+	return unix.Close(ln.fd)
 }
 
 // DialSCTP - bind socket to laddr (if given) and connect to raddr
@@ -259,10 +263,10 @@ func DialSCTPExt(network string, laddr, raddr *SCTPAddr, options InitMsg) (*SCTP
 // dialSCTPExtConfig - same as DialSCTP but with given SCTP options and socket configuration
 func dialSCTPExtConfig(network string, laddr, raddr *SCTPAddr, options InitMsg, control func(network, address string, c syscall.RawConn) error) (*SCTPConn, error) {
 	af, ipv6only := favoriteAddrFamily(network, laddr, raddr, "dial")
-	sock, err := syscall.Socket(
+	sock, err := unix.Socket(
 		af,
-		syscall.SOCK_STREAM,
-		syscall.IPPROTO_SCTP,
+		unix.SOCK_STREAM,
+		unix.IPPROTO_SCTP,
 	)
 	if err != nil {
 		return nil, err
@@ -271,7 +275,7 @@ func dialSCTPExtConfig(network string, laddr, raddr *SCTPAddr, options InitMsg, 
 	// close socket on error
 	defer func() {
 		if err != nil {
-			syscall.Close(sock)
+			unix.Close(sock)
 		}
 	}()
 	if err = setDefaultSockopts(sock, af, ipv6only); err != nil {
@@ -290,9 +294,9 @@ func dialSCTPExtConfig(network string, laddr, raddr *SCTPAddr, options InitMsg, 
 	if laddr != nil {
 		// If IP address and/or port was not provided so far, let's use the unspecified IPv4 or IPv6 address
 		if len(laddr.IPAddrs) == 0 {
-			if af == syscall.AF_INET {
+			if af == unix.AF_INET {
 				laddr.IPAddrs = append(laddr.IPAddrs, net.IPAddr{IP: net.IPv4zero})
-			} else if af == syscall.AF_INET6 {
+			} else if af == unix.AF_INET6 {
 				laddr.IPAddrs = append(laddr.IPAddrs, net.IPAddr{IP: net.IPv6zero})
 			}
 		}

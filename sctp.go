@@ -27,6 +27,8 @@ import (
 	"syscall"
 	"time"
 	"unsafe"
+
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -232,8 +234,8 @@ type SCTPAddr struct {
 func (a *SCTPAddr) ToRawSockAddrBuf() []byte {
 	p := htons(uint16(a.Port))
 	if len(a.IPAddrs) == 0 { // if a.IPAddrs list is empty - fall back to IPv4 zero addr
-		s := syscall.RawSockaddrInet4{
-			Family: syscall.AF_INET,
+		s := unix.RawSockaddrInet4{
+			Family: unix.AF_INET,
 			Port:   p,
 		}
 		copy(s.Addr[:], net.IPv4zero)
@@ -246,8 +248,8 @@ func (a *SCTPAddr) ToRawSockAddrBuf() []byte {
 			ipBytes = net.IPv4zero
 		}
 		if ip4 := ipBytes.To4(); ip4 != nil {
-			s := syscall.RawSockaddrInet4{
-				Family: syscall.AF_INET,
+			s := unix.RawSockaddrInet4{
+				Family: unix.AF_INET,
 				Port:   p,
 			}
 			copy(s.Addr[:], ip4)
@@ -258,8 +260,8 @@ func (a *SCTPAddr) ToRawSockAddrBuf() []byte {
 			if err == nil {
 				scopeid = uint32(ifi.Index)
 			}
-			s := syscall.RawSockaddrInet6{
-				Family:   syscall.AF_INET6,
+			s := unix.RawSockaddrInet6{
+				Family:   unix.AF_INET6,
 				Port:     p,
 				Scope_id: scopeid,
 			}
@@ -341,7 +343,7 @@ func SCTPConnect(fd int, addr *SCTPAddr) (int, error) {
 	_, _, err := getsockopt(fd, SCTP_SOCKOPT_CONNECTX3, uintptr(unsafe.Pointer(&param)), uintptr(unsafe.Pointer(&optlen)))
 	if err == nil {
 		return int(param.AssocID), nil
-	} else if err != syscall.ENOPROTOOPT {
+	} else if err != unix.ENOPROTOOPT {
 		return 0, err
 	}
 	r0, _, err := setsockopt(fd, SCTP_SOCKOPT_CONNECTX, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
@@ -356,7 +358,7 @@ func SCTPBind(fd int, addr *SCTPAddr, flags int) error {
 	case SCTP_BINDX_REM_ADDR:
 		option = SCTP_SOCKOPT_BINDX_REM
 	default:
-		return syscall.EINVAL
+		return unix.EINVAL
 	}
 
 	buf := addr.ToRawSockAddrBuf()
@@ -518,22 +520,22 @@ func resolveFromRawAddr(ptr unsafe.Pointer, n int) (*SCTPAddr, error) {
 		IPAddrs: make([]net.IPAddr, n),
 	}
 
-	switch family := (*(*syscall.RawSockaddrAny)(ptr)).Addr.Family; family {
-	case syscall.AF_INET:
-		addr.Port = int(ntohs(uint16((*(*syscall.RawSockaddrInet4)(ptr)).Port)))
-		tmp := syscall.RawSockaddrInet4{}
+	switch family := (*(*unix.RawSockaddrAny)(ptr)).Addr.Family; family {
+	case unix.AF_INET:
+		addr.Port = int(ntohs(uint16((*(*unix.RawSockaddrInet4)(ptr)).Port)))
+		tmp := unix.RawSockaddrInet4{}
 		size := unsafe.Sizeof(tmp)
 		for i := 0; i < n; i++ {
-			a := *(*syscall.RawSockaddrInet4)(unsafe.Pointer(
+			a := *(*unix.RawSockaddrInet4)(unsafe.Pointer(
 				uintptr(ptr) + size*uintptr(i)))
 			addr.IPAddrs[i] = net.IPAddr{IP: a.Addr[:]}
 		}
-	case syscall.AF_INET6:
-		addr.Port = int(ntohs(uint16((*(*syscall.RawSockaddrInet4)(ptr)).Port)))
-		tmp := syscall.RawSockaddrInet6{}
+	case unix.AF_INET6:
+		addr.Port = int(ntohs(uint16((*(*unix.RawSockaddrInet4)(ptr)).Port)))
+		tmp := unix.RawSockaddrInet6{}
 		size := unsafe.Sizeof(tmp)
 		for i := 0; i < n; i++ {
-			a := *(*syscall.RawSockaddrInet6)(unsafe.Pointer(
+			a := *(*unix.RawSockaddrInet6)(unsafe.Pointer(
 				uintptr(ptr) + size*uintptr(i)))
 			var zone string
 			ifi, err := net.InterfaceByIndex(int(a.Scope_id))
@@ -624,15 +626,15 @@ func (c *SCTPConn) PeelOff(id int) (*SCTPConn, error) {
 }
 
 func (c *SCTPConn) SetDeadline(t time.Time) error {
-	return syscall.EOPNOTSUPP
+	return unix.EOPNOTSUPP
 }
 
 func (c *SCTPConn) SetReadDeadline(t time.Time) error {
-	return syscall.EOPNOTSUPP
+	return unix.EOPNOTSUPP
 }
 
 func (c *SCTPConn) SetWriteDeadline(t time.Time) error {
-	return syscall.EOPNOTSUPP
+	return unix.EOPNOTSUPP
 }
 
 type SCTPListener struct {
@@ -659,7 +661,7 @@ func NewSCTPSndRcvInfoWrappedConn(conn *SCTPConn) *SCTPSndRcvInfoWrappedConn {
 
 func (c *SCTPSndRcvInfoWrappedConn) Write(b []byte) (int, error) {
 	if len(b) < int(sndRcvInfoSize) {
-		return 0, syscall.EINVAL
+		return 0, unix.EINVAL
 	}
 	info := (*SndRcvInfo)(unsafe.Pointer(&b[0]))
 	n, err := c.conn.SCTPWrite(b[sndRcvInfoSize:], info)
@@ -668,7 +670,7 @@ func (c *SCTPSndRcvInfoWrappedConn) Write(b []byte) (int, error) {
 
 func (c *SCTPSndRcvInfoWrappedConn) Read(b []byte) (int, error) {
 	if len(b) < int(sndRcvInfoSize) {
-		return 0, syscall.EINVAL
+		return 0, unix.EINVAL
 	}
 	n, info, err := c.conn.SCTPRead(b[sndRcvInfoSize:])
 	if err != nil {

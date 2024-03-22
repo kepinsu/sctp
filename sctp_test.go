@@ -21,8 +21,9 @@ import (
 	"reflect"
 	"runtime"
 	"sync"
-	"syscall"
 	"testing"
+
+	syscall "golang.org/x/sys/unix"
 )
 
 type resolveSCTPAddrTest struct {

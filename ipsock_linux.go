@@ -8,7 +8,8 @@ import (
 	"net"
 	"os"
 	"sync"
-	"syscall"
+
+	syscall "golang.org/x/sys/unix"
 )
 
 //from https://github.com/golang/go
